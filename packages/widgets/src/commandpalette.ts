@@ -1349,7 +1349,7 @@ namespace Private {
    * A sort comparison function for a match score.
    */
   function scoreCmp(a: IScore, b: IScore, palette: CommandPalette): number {
-    // Only compare recently executed status if tracking is enabled
+    // Compare recently executed status if tracking is enabled
     if (palette.trackRecentCommands) {
       const aRecent = palette['_recentlyExecuted'].has(a.item.command);
       const bRecent = palette['_recentlyExecuted'].has(b.item.command);
@@ -1358,20 +1358,53 @@ namespace Private {
       }
     }
 
-    // Then compare by match type
+    // First compare based on the match type
     let m1 = a.matchType - b.matchType;
     if (m1 !== 0) {
       return m1;
     }
 
-    // Then compare by score
-    let c1 = b.score - a.score;
-    if (c1 !== 0) {
-      return c1;
+    // Otherwise, compare based on the match score
+    let d1 = a.score - b.score;
+    if (d1 !== 0) {
+      return d1;
     }
 
-    // Then compare by rank
-    return a.item.rank - b.item.rank;
+    // Find the match index based on the match type
+    let i1 = 0;
+    let i2 = 0;
+    switch (a.matchType) {
+      case MatchType.Label:
+        i1 = a.labelIndices![0];
+        i2 = b.labelIndices![0];
+        break;
+      case MatchType.Category:
+      case MatchType.Split:
+        i1 = a.categoryIndices![0];
+        i2 = b.categoryIndices![0];
+        break;
+    }
+
+    // Compare based on the match index
+    if (i1 !== i2) {
+      return i1 - i2;
+    }
+
+    // Otherwise, compare by category
+    let d2 = a.item.category.localeCompare(b.item.category);
+    if (d2 !== 0) {
+      return d2;
+    }
+
+    // Otherwise, compare by rank
+    let r1 = a.item.rank;
+    let r2 = b.item.rank;
+    if (r1 !== r2) {
+      return r1 < r2 ? -1 : 1; // Infinity safe
+    }
+
+    // Finally, compare by label
+    return a.item.label.localeCompare(b.item.label);
   }
 
   /**
