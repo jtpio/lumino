@@ -41,6 +41,7 @@ export class CommandPalette extends Widget {
     this.setFlag(Widget.Flag.DisallowLayout);
     this.commands = options.commands;
     this.renderer = options.renderer || CommandPalette.defaultRenderer;
+    this.trackRecentCommands = options.trackRecentCommands !== undefined ? options.trackRecentCommands : true;
     this.commands.commandChanged.connect(this._onGenericChange, this);
     this.commands.keyBindingChanged.connect(this._onGenericChange, this);
   }
@@ -51,6 +52,7 @@ export class CommandPalette extends Widget {
   dispose(): void {
     this._items.length = 0;
     this._results = null;
+    this._recentlyExecuted.clear();
     super.dispose();
   }
 
@@ -342,7 +344,7 @@ export class CommandPalette extends Widget {
         let item = result.item;
         let indices = result.indices;
         let active = i === activeIndex;
-        content[i] = renderer.renderItem({ item, indices, active });
+        content[i] = renderer.renderItem({ item, indices, active, palette: this });
       }
     }
 
@@ -500,6 +502,11 @@ export class CommandPalette extends Widget {
     // Execute the item.
     this.commands.execute(part.item.command, part.item.args);
 
+    // Add the command to the recently executed set
+    if (this.trackRecentCommands) {
+      this._recentlyExecuted.add(part.item.command);
+    }
+
     // Clear the query text.
     this.inputNode.value = '';
 
@@ -525,6 +532,8 @@ export class CommandPalette extends Widget {
   private _activeIndex = -1;
   private _items: CommandPalette.IItem[] = [];
   private _results: Private.SearchResult[] | null = null;
+  private _recentlyExecuted: Set<string> = new Set<string>();
+  public readonly trackRecentCommands: boolean;
 }
 
 /**
@@ -546,6 +555,15 @@ export namespace CommandPalette {
      * The default is a shared renderer instance.
      */
     renderer?: IRenderer;
+
+    /**
+     * Whether to track and prioritize recently executed commands.
+     * 
+     * #### Notes
+     * If enabled, recently executed commands will appear at the top
+     * of the search results.
+     */
+    trackRecentCommands?: boolean;
   }
 
   /**
@@ -705,6 +723,11 @@ export namespace CommandPalette {
      * Whether the item is the active item.
      */
     readonly active: boolean;
+
+    /**
+     * The command palette instance.
+     */
+    readonly palette: CommandPalette;
   }
 
   /**
@@ -906,6 +929,11 @@ export namespace CommandPalette {
       let extra = data.item.className;
       if (extra) {
         name += ` ${extra}`;
+      }
+
+      // Add the recently used class if tracking is enabled
+      if (data.palette.trackRecentCommands && data.palette['_recentlyExecuted'].has(data.item.command)) {
+        name += ' lm-mod-recently-used';
       }
 
       // Return the complete class name.
@@ -1320,54 +1348,30 @@ namespace Private {
   /**
    * A sort comparison function for a match score.
    */
-  function scoreCmp(a: IScore, b: IScore): number {
-    // First compare based on the match type
+  function scoreCmp(a: IScore, b: IScore, palette: CommandPalette): number {
+    // Only compare recently executed status if tracking is enabled
+    if (palette.trackRecentCommands) {
+      const aRecent = palette['_recentlyExecuted'].has(a.item.command);
+      const bRecent = palette['_recentlyExecuted'].has(b.item.command);
+      if (aRecent !== bRecent) {
+        return aRecent ? -1 : 1;
+      }
+    }
+
+    // Then compare by match type
     let m1 = a.matchType - b.matchType;
     if (m1 !== 0) {
       return m1;
     }
 
-    // Otherwise, compare based on the match score.
-    let d1 = a.score - b.score;
-    if (d1 !== 0) {
-      return d1;
+    // Then compare by score
+    let c1 = b.score - a.score;
+    if (c1 !== 0) {
+      return c1;
     }
 
-    // Find the match index based on the match type.
-    let i1 = 0;
-    let i2 = 0;
-    switch (a.matchType) {
-      case MatchType.Label:
-        i1 = a.labelIndices![0];
-        i2 = b.labelIndices![0];
-        break;
-      case MatchType.Category:
-      case MatchType.Split:
-        i1 = a.categoryIndices![0];
-        i2 = b.categoryIndices![0];
-        break;
-    }
-
-    // Compare based on the match index.
-    if (i1 !== i2) {
-      return i1 - i2;
-    }
-
-    // Otherwise, compare by category.
-    let d2 = a.item.category.localeCompare(b.item.category);
-    if (d2 !== 0) {
-      return d2;
-    }
-
-    // Otherwise, compare by rank.
-    let r1 = a.item.rank;
-    let r2 = b.item.rank;
-    if (r1 !== r2) {
-      return r1 < r2 ? -1 : 1; // Infinity safe
-    }
-
-    // Finally, compare by label.
-    return a.item.label.localeCompare(b.item.label);
+    // Then compare by rank
+    return a.item.rank - b.item.rank;
   }
 
   /**
