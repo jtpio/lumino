@@ -41,6 +41,7 @@ export class CommandPalette extends Widget {
     this.setFlag(Widget.Flag.DisallowLayout);
     this.commands = options.commands;
     this.renderer = options.renderer || CommandPalette.defaultRenderer;
+    this._maxRecentCommands = options.maxRecentCommands ?? 0;
     this.commands.commandChanged.connect(this._onGenericChange, this);
     this.commands.keyBindingChanged.connect(this._onGenericChange, this);
   }
@@ -251,6 +252,24 @@ export class CommandPalette extends Widget {
   }
 
   /**
+   * Clear the recent commands history.
+   *
+   * #### Notes
+   * This does nothing if recent commands functionality is disabled.
+   */
+  protected clearRecentCommands(): void {
+    if (this._maxRecentCommands === 0) {
+      return;
+    }
+
+    // Clear the recent commands array.
+    this._recentCommands.length = 0;
+
+    // Refresh the search results.
+    this.refresh();
+  }
+
+  /**
    * A message handler invoked on a `'before-attach'` message.
    */
   protected onBeforeAttach(msg: Message): void {
@@ -309,7 +328,13 @@ export class CommandPalette extends Widget {
     let results = this._results;
     if (!results) {
       // Generate and store the new search results.
-      results = this._results = Private.search(this._items, query);
+      const recentCommands =
+        this._maxRecentCommands > 0 ? this._recentCommands : [];
+      results = this._results = Private.search(
+        this._items,
+        query,
+        recentCommands
+      );
 
       // Reset the active index.
       this._activeIndex = query
@@ -502,6 +527,11 @@ export class CommandPalette extends Widget {
     // Execute the item.
     this.commands.execute(part.item.command, part.item.args);
 
+    // Track the command in recent commands if enabled
+    if (this._maxRecentCommands > 0) {
+      this._addToRecentCommands(part.item.command, part.item.args);
+    }
+
     // Clear the query text.
     this.inputNode.value = '';
 
@@ -524,9 +554,41 @@ export class CommandPalette extends Widget {
     this.refresh();
   }
 
+  /**
+   * Add a command to the recent commands list.
+   */
+  private _addToRecentCommands(
+    command: string,
+    args: ReadonlyJSONObject
+  ): void {
+    // Remove any existing entry for this command/args combination
+    const commandKey = Private.getCommandKey(command, args);
+    this._recentCommands = this._recentCommands.filter(
+      recent =>
+        Private.getCommandKey(recent.command, recent.args) !== commandKey
+    );
+
+    // Add the new entry at the beginning
+    this._recentCommands.unshift({
+      command,
+      args,
+      timestamp: Date.now()
+    });
+
+    // Trim to max size
+    if (this._recentCommands.length > this._maxRecentCommands) {
+      this._recentCommands = this._recentCommands.slice(
+        0,
+        this._maxRecentCommands
+      );
+    }
+  }
+
   private _activeIndex = -1;
   private _items: CommandPalette.IItem[] = [];
   private _results: Private.SearchResult[] | null = null;
+  private _maxRecentCommands: number;
+  private _recentCommands: Private.IRecentCommand[] = [];
 }
 
 /**
@@ -548,6 +610,20 @@ export namespace CommandPalette {
      * The default is a shared renderer instance.
      */
     renderer?: IRenderer;
+
+    /**
+     * The maximum number of recent commands to remember.
+     *
+     * When set to 0, recent commands functionality is disabled.
+     * When set to a positive number, recently executed commands will be
+     * shown at the top of the command palette when no search query is active.
+     *
+     * When the number of recent commands exceeds this limit,
+     * the oldest commands will be removed.
+     *
+     * The default value is `0` (disabled) for backwards compatibility.
+     */
+    maxRecentCommands?: number;
   }
 
   /**
@@ -1093,14 +1169,35 @@ namespace Private {
   export type SearchResult = IHeaderResult | IItemResult;
 
   /**
+   * An interface for storing information about recently executed commands.
+   */
+  export interface IRecentCommand {
+    /**
+     * The command that was executed.
+     */
+    readonly command: string;
+
+    /**
+     * The arguments that were passed to the command.
+     */
+    readonly args: ReadonlyJSONObject;
+
+    /**
+     * The timestamp when the command was last executed.
+     */
+    readonly timestamp: number;
+  }
+
+  /**
    * Search an array of command items for fuzzy matches.
    */
   export function search(
     items: CommandPalette.IItem[],
-    query: string
+    query: string,
+    recentCommands: IRecentCommand[] = []
   ): SearchResult[] {
     // Fuzzy match the items for the query.
-    let scores = matchItems(items, query);
+    let scores = matchItems(items, query, recentCommands);
 
     // Sort the items based on their score.
     scores.sort(scoreCmp);
@@ -1114,6 +1211,16 @@ namespace Private {
    */
   export function canActivate(result: SearchResult): boolean {
     return result.type === 'item' && result.item.isEnabled;
+  }
+
+  /**
+   * Create a unique key for a command and its arguments.
+   */
+  export function getCommandKey(
+    command: string,
+    args: ReadonlyJSONObject
+  ): string {
+    return `${command}:${JSON.stringify(args)}`;
   }
 
   /**
@@ -1134,6 +1241,7 @@ namespace Private {
    * An enum of the supported match types.
    */
   const enum MatchType {
+    Recent,
     Label,
     Category,
     Split,
@@ -1168,12 +1276,35 @@ namespace Private {
      * The command item associated with the match.
      */
     item: CommandPalette.IItem;
+
+    /**
+     * The recent command index (lower values are more recent).
+     * -1 if not a recent command.
+     */
+    recentIndex: number;
+  }
+
+  /**
+   * Get the recent command index for an item, or -1 if not recent.
+   */
+  function getRecentIndex(
+    item: CommandPalette.IItem,
+    recentCommands: IRecentCommand[]
+  ): number {
+    const commandKey = getCommandKey(item.command, item.args);
+    return recentCommands.findIndex(
+      recent => getCommandKey(recent.command, recent.args) === commandKey
+    );
   }
 
   /**
    * Perform a fuzzy match on an array of command items.
    */
-  function matchItems(items: CommandPalette.IItem[], query: string): IScore[] {
+  function matchItems(
+    items: CommandPalette.IItem[],
+    query: string,
+    recentCommands: IRecentCommand[] = []
+  ): IScore[] {
     // Normalize the query text to lower case with no whitespace.
     query = normalizeQuery(query);
 
@@ -1188,20 +1319,27 @@ namespace Private {
         continue;
       }
 
+      // Get the recent command index
+      const recentIndex = getRecentIndex(item, recentCommands);
+
       // If the query is empty, all items are matched by default.
       if (!query) {
+        // For empty queries, prioritize recent commands
+        const matchType =
+          recentIndex >= 0 ? MatchType.Recent : MatchType.Default;
         scores.push({
-          matchType: MatchType.Default,
+          matchType,
           categoryIndices: null,
           labelIndices: null,
           score: 0,
-          item
+          item,
+          recentIndex
         });
         continue;
       }
 
       // Run the fuzzy search for the item and query.
-      let score = fuzzySearch(item, query);
+      let score = fuzzySearch(item, query, recentIndex);
 
       // Ignore the item if it is not a match.
       if (!score) {
@@ -1227,7 +1365,8 @@ namespace Private {
    */
   function fuzzySearch(
     item: CommandPalette.IItem,
-    query: string
+    query: string,
+    recentIndex: number = -1
   ): IScore | null {
     // Create the source text to be searched.
     let category = item.category.toLowerCase();
@@ -1294,7 +1433,8 @@ namespace Private {
         categoryIndices: null,
         labelIndices,
         score,
-        item
+        item,
+        recentIndex
       };
     }
 
@@ -1305,7 +1445,8 @@ namespace Private {
         categoryIndices,
         labelIndices: null,
         score,
-        item
+        item,
+        recentIndex
       };
     }
 
@@ -1315,7 +1456,8 @@ namespace Private {
       categoryIndices,
       labelIndices,
       score,
-      item
+      item,
+      recentIndex
     };
   }
 
@@ -1327,6 +1469,11 @@ namespace Private {
     let m1 = a.matchType - b.matchType;
     if (m1 !== 0) {
       return m1;
+    }
+
+    // For Recent match type, sort by recent index (lower is more recent)
+    if (a.matchType === MatchType.Recent) {
+      return a.recentIndex - b.recentIndex;
     }
 
     // Otherwise, compare based on the match score.
@@ -1382,13 +1529,20 @@ namespace Private {
     // Iterate over each score in the array.
     for (let i = 0, n = scores.length; i < n; ++i) {
       // Extract the current item and indices.
-      let { item, categoryIndices, labelIndices } = scores[i];
+      let { item, categoryIndices, labelIndices, matchType } = scores[i];
 
-      // Extract the category for the current item.
-      let category = item.category;
+      // Determine the category to display
+      let category = matchType === MatchType.Recent ? 'Recent' : item.category;
 
       // Is this the same category as the preceding result?
-      if (i === 0 || category !== scores[i - 1].item.category) {
+      let prevCategory =
+        i === 0
+          ? null
+          : scores[i - 1].matchType === MatchType.Recent
+          ? 'Recent'
+          : scores[i - 1].item.category;
+
+      if (i === 0 || category !== prevCategory) {
         // Add the header result for the category.
         results.push({ type: 'header', category, indices: categoryIndices });
       }
