@@ -111,6 +111,54 @@ export class CommandPalette extends Widget {
   }
 
   /**
+   * The maximum number of recent commands to remember.
+   *
+   * #### Notes
+   * When set to 0, recent commands functionality is disabled.
+   * When set to a positive number, recently executed commands will be
+   * shown at the top of the command palette when no search query is active.
+   */
+  get maxRecentCommands(): number {
+    return this._maxRecentCommands;
+  }
+
+  /**
+   * Set the maximum number of recent commands to remember.
+   *
+   * #### Notes
+   * When set to 0, recent commands functionality is disabled and the
+   * recent commands history is cleared.
+   * When set to a positive number, recently executed commands will be
+   * shown at the top of the command palette when no search query is active.
+   *
+   * If the new value is smaller than the current number of recent commands,
+   * the oldest commands will be removed to fit the new limit.
+   */
+  set maxRecentCommands(value: number) {
+    // Ensure the value is non-negative
+    value = Math.max(0, Math.floor(value));
+
+    // If the value hasn't changed, do nothing
+    if (value === this._maxRecentCommands) {
+      return;
+    }
+
+    // Update the max recent commands value
+    this._maxRecentCommands = value;
+
+    // If disabled, clear the recent commands
+    if (value === 0) {
+      this._recentCommands.length = 0;
+    } else if (this._recentCommands.length > value) {
+      // Trim to the new maximum size, keeping the most recent
+      this._recentCommands = this._recentCommands.slice(0, value);
+    }
+
+    // Refresh the palette to update the display
+    this.refresh();
+  }
+
+  /**
    * Add a command item to the command palette.
    *
    * @param options - The options for creating the command item.
