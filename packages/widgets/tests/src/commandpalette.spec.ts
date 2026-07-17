@@ -138,33 +138,56 @@ describe('@lumino/widgets', () => {
       context('recent commands', () => {
         let visibleFlag = true;
 
+        // TEMP-INSTRUMENTATION: remove before committing.
+        const __timed = <T>(name: string, fn: () => T): T => {
+          const t0 = performance.now();
+          const result = fn();
+          const d = performance.now() - t0;
+          if (d > 100) {
+            console.log(`SLOWOP ${name}: ${Math.round(d)}ms`);
+          }
+          return result;
+        };
+
         const executeItem = (label: string): void => {
+          const t0 = performance.now();
           MessageLoop.flush();
+          const t1 = performance.now();
           let labels = Array.from(
             palette.contentNode.querySelectorAll('.lm-CommandPalette-itemLabel')
           );
           let labelNode = labels.find(node => node.textContent === label)!;
           let itemNode = labelNode.closest('.lm-CommandPalette-item')!;
+          const t2 = performance.now();
           itemNode.dispatchEvent(new MouseEvent('click', { bubbles }));
+          const t3 = performance.now();
           MessageLoop.flush();
+          const t4 = performance.now();
+          if (t4 - t0 > 100) {
+            console.log(
+              `SLOWOP executeItem(${label}): total=${Math.round(t4 - t0)}ms ` +
+                `flush1=${Math.round(t1 - t0)} query=${Math.round(t2 - t1)} ` +
+                `click=${Math.round(t3 - t2)} flush2=${Math.round(t4 - t3)}`
+            );
+          }
         };
 
         const headerLabels = (): (string | null)[] => {
-          MessageLoop.flush();
+          __timed('headerLabels.flush', () => MessageLoop.flush());
           return Array.from(
             palette.contentNode.querySelectorAll('.lm-CommandPalette-header')
           ).map(node => node.textContent);
         };
 
         const itemLabels = (): (string | null)[] => {
-          MessageLoop.flush();
+          __timed('itemLabels.flush', () => MessageLoop.flush());
           return Array.from(
             palette.contentNode.querySelectorAll('.lm-CommandPalette-itemLabel')
           ).map(node => node.textContent);
         };
 
         const recentLabels = (): (string | null)[] => {
-          MessageLoop.flush();
+          __timed('recentLabels.flush', () => MessageLoop.flush());
           return Array.from(
             palette.contentNode.querySelectorAll(
               '.lm-CommandPalette-item.lm-mod-recent .lm-CommandPalette-itemLabel'

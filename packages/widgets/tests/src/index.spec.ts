@@ -9,6 +9,28 @@
 |----------------------------------------------------------------------------*/
 import '@lumino/widgets/style/index.css';
 
+// TEMP-INSTRUMENTATION: remove before committing. These root-level hooks
+// wrap every test in the bundle: they log tests whose full runnable window
+// (all hooks + body) exceeds 100ms, and gaps between runnables over 100ms.
+let __tStart = 0;
+let __tPrevEnd = 0;
+beforeEach(function () {
+  __tStart = performance.now();
+  const gap = __tStart - __tPrevEnd;
+  if (__tPrevEnd > 0 && gap > 100) {
+    console.log(
+      `SLOWGAP ${Math.round(gap)}ms before: ${this.currentTest?.fullTitle()}`
+    );
+  }
+});
+afterEach(function () {
+  __tPrevEnd = performance.now();
+  const d = __tPrevEnd - __tStart;
+  if (d > 100) {
+    console.log(`SLOWTEST ${Math.round(d)}ms: ${this.currentTest?.fullTitle()}`);
+  }
+});
+
 import './accordionlayout.spec';
 import './accordionpanel.spec';
 import './boxengine.spec';
